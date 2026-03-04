@@ -1,0 +1,32 @@
+{
+  "name": "meros-client-manager-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for managing client deferral in Smartup system",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "clear-db": "node scripts/clearDb.js",
+    "update-date": "node scripts/updateDeferralDate.js",
+    "list": "node scripts/listRecords.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "smartup",
+    "telegraf"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "axios-cookiejar-support": "^6.0.5",
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "telegraf": "^4.15.0",
+    "tough-cookie": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
