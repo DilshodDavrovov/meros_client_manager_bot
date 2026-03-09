@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const logger = require('../utils/logger');
 const { getActiveExpiredRecords, markAsRestored, getAllowedUserIds } = require('../db/repositories');
 const smartupApi = require('../smartup/api');
+const { notifyRestored: notifyGroupRestored } = require('../notifications');
 
 async function notifyRestored(bot, rec) {
   if (!bot) return;
@@ -44,6 +45,9 @@ async function processExpiredRecords(bot) {
     try {
       await restoreRecord(rec);
       await notifyRestored(bot, rec);
+      if (bot?.telegram) {
+        await notifyGroupRestored(bot.telegram, { rec, manualRestore: false });
+      }
       logger.info('Restore: restored deferral for', rec.person_id);
     } catch (err) {
       logger.error('Restore failed for', rec.person_id, err.message);

@@ -1,12 +1,45 @@
 const { query, runInTransactionAsync } = require('./sqlite');
 
-async function getAllowedUserIds() {
+/**
+ * Parse ALLOWED_USER_IDS: "123:Иван,456:Петр" or "123,456" (id only → name = id)
+ * @returns {{id: number, name: string}[]}
+ */
+function parseAllowedUsers() {
   const fromEnv = process.env.ALLOWED_USER_IDS;
   if (fromEnv && fromEnv.trim()) {
-    return fromEnv.split(',').map(s => s.trim()).filter(Boolean).map(Number);
+    return fromEnv.split(',').map(s => s.trim()).filter(Boolean).map(part => {
+      const sep = part.indexOf(':');
+      if (sep >= 0) {
+        return { id: parseInt(part.slice(0, sep), 10), name: part.slice(sep + 1).trim() || part };
+      }
+      const id = parseInt(part, 10);
+      return { id, name: String(id) };
+    }).filter(u => !isNaN(u.id));
   }
-  const rows = query('SELECT telegram_user_id FROM allowed_users');
-  return rows.map(r => r.telegram_user_id);
+  try {
+    const rows = query('SELECT telegram_user_id FROM allowed_users');
+    return (rows || []).map(r => ({
+      id: r.telegram_user_id,
+      name: String(r.telegram_user_id),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function getAllowedUserIds() {
+  const users = parseAllowedUsers();
+  return users.map(u => u.id);
+}
+
+function getAllowedUsers() {
+  return parseAllowedUsers();
+}
+
+function getUserName(userId) {
+  const users = parseAllowedUsers();
+  const u = users.find(x => x.id === userId);
+  return u ? u.name : String(userId);
 }
 
 async function insertDeferralHistory(data) {
@@ -90,6 +123,8 @@ async function insertDeferralHistoryAndUpdateSmartup(data, updateFn) {
 
 module.exports = {
   getAllowedUserIds,
+  getAllowedUsers,
+  getUserName,
   insertDeferralHistory,
   getAllRecords,
   getActiveRecords,

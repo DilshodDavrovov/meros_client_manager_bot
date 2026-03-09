@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const smartupApi = require('../smartup/api');
 const { insertDeferralHistoryAndUpdateSmartup, getActiveRecords, getRecordById, hasActiveTaskForPerson } = require('../db/repositories');
 const { restoreRecord } = require('../cron/restoreDeferral.job');
+const { notifyDataChanged, notifyRestored } = require('../notifications');
 
 const STEPS = {
   IDLE: 'idle',
@@ -111,6 +112,7 @@ async function handleRestoreCallback(ctx) {
     await restoreRecord(rec);
     const name = rec.client_name || `person_id ${rec.person_id}`;
     await ctx.reply(`✅ Срок отсрочки восстановлен: ${name}`);
+    await notifyRestored(ctx.telegram, { rec, manualRestore: true, userId: ctx.from?.id });
   } catch (err) {
     logger.error('Restore callback error', err);
     await ctx.reply('❌ Ошибка при восстановлении: ' + (err.message || 'неизвестная ошибка'));
@@ -209,6 +211,15 @@ async function performDeferralUpdate(ctx, session) {
       await ctx.replyWithHTML(
         `✅ Срок отсрочки обновлён до <b>${escapeHtml(newDeferralValue)}</b> (без задачи на возврат)`
       );
+      await notifyDataChanged(ctx.telegram, {
+        userId: ctx.from?.id,
+        clientName: client.name,
+        personId,
+        oldValue: client.deferral,
+        newValue: newDeferralValue,
+        endDateDisplay: null,
+        noRestoreTask: true,
+      });
     } else {
       await insertDeferralHistoryAndUpdateSmartup(
         {
@@ -225,6 +236,15 @@ async function performDeferralUpdate(ctx, session) {
         `✅ Срок отсрочки обновлён до <b>${escapeHtml(newDeferralValue)}</b> до <b>${endDateDisplay}</b>\n\n` +
         '⏰ Автоматический возврат'
       );
+      await notifyDataChanged(ctx.telegram, {
+        userId: ctx.from?.id,
+        clientName: client.name,
+        personId,
+        oldValue: client.deferral,
+        newValue: newDeferralValue,
+        endDateDisplay,
+        noRestoreTask: false,
+      });
     }
 
     session.step = STEPS.IDLE;
