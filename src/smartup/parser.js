@@ -33,12 +33,14 @@ function parseClientFromEditModel(body) {
     : regionId || '';
 
   let deferral = '';
+  let currentPersonTypeId = '';
   const pg = data.person_groups || [];
   if (Array.isArray(pg)) {
     for (const g of pg) {
       const gid = Array.isArray(g) ? g[0] : (g.group_id ?? g.groupId);
       if (DEFERRAL_GROUP_IDS.includes(String(gid))) {
         deferral = Array.isArray(g) ? (g[3] || g[2] || '') : (g.name || g.value || '');
+        currentPersonTypeId = Array.isArray(g) ? (g[2] || '') : (g.person_type_id ?? g.personTypeId ?? '');
         break;
       }
     }
@@ -50,6 +52,7 @@ function parseClientFromEditModel(body) {
     inn: String(inn || '—'),
     region: String(region || '—'),
     raw: data,
+    currentPersonTypeId: String(currentPersonTypeId || ''),
   };
 }
 

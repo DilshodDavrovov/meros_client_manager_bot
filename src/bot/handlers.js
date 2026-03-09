@@ -54,7 +54,10 @@ const DURATION_OPTIONS = [
   { days: 15, label: '15 дней' },
   { days: 30, label: '30 дней' },
   { days: 60, label: '60 дней' },
+  { days: null, label: 'Без срока' },
 ];
+
+const EMPTY_DEFERRAL = { id: 'empty', label: 'Без отсрочки' };
 
 function formatEndDate(yyyyMMdd) {
   if (!yyyyMMdd) return '—';
@@ -128,7 +131,7 @@ async function handleText(ctx) {
     session.deferralOptions = null;
     session.endDateStr = null;
     session.endDateDisplay = null;
-    session.clearDeferral = null;
+    session.noRestoreTask = null;
     return handleStart(ctx);
   }
   if (text === '📋 Tasks' || text === 'Tasks' || text.toLowerCase() === 'tasks') {
@@ -190,36 +193,39 @@ async function performDeferralUpdate(ctx, session) {
   const { personId, client, newDeferralValue, newDeferralTypeId, endDateStr, endDateDisplay } = session;
   const startDate = new Date();
   const startDateStr = startDate.toISOString().slice(0, 10);
+  const noRestoreTask = session.noRestoreTask;
 
   await ctx.reply('⏳ Обновляю клиента...');
 
   try {
-    let deferralParam;
-    if (session.clearDeferral) {
-      // Временная очистка отсрочки: отправляем пустой person_type_id для группы 136
-      deferralParam = { personTypeId: '', label: '' };
+    const deferralParam = (newDeferralTypeId === '' || newDeferralTypeId === 'empty')
+      ? { personTypeId: '', label: newDeferralValue }
+      : (newDeferralTypeId
+          ? { personTypeId: newDeferralTypeId, label: newDeferralValue }
+          : newDeferralValue);
+
+    if (noRestoreTask) {
+      await smartupApi.updateDeferralAndSave(client.raw, deferralParam, personId);
+      await ctx.replyWithHTML(
+        `✅ Срок отсрочки обновлён до <b>${escapeHtml(newDeferralValue)}</b> (без задачи на возврат)`
+      );
     } else {
-      deferralParam = newDeferralTypeId
-        ? { personTypeId: newDeferralTypeId, label: newDeferralValue }
-        : newDeferralValue;
+      await insertDeferralHistoryAndUpdateSmartup(
+        {
+          person_id: personId,
+          client_name: client.name,
+          old_deferral_value: client.deferral,
+          new_deferral_value: newDeferralValue,
+          start_date: startDateStr,
+          end_date: endDateStr,
+        },
+        () => smartupApi.updateDeferralAndSave(client.raw, deferralParam, personId)
+      );
+      await ctx.replyWithHTML(
+        `✅ Срок отсрочки обновлён до <b>${escapeHtml(newDeferralValue)}</b> до <b>${endDateDisplay}</b>\n\n` +
+        '⏰ Автоматический возврат'
+      );
     }
-
-    await insertDeferralHistoryAndUpdateSmartup(
-      {
-        person_id: personId,
-        client_name: client.name,
-        old_deferral_value: client.deferral,
-        new_deferral_value: newDeferralValue,
-        start_date: startDateStr,
-        end_date: endDateStr,
-      },
-      () => smartupApi.updateDeferralAndSave(client.raw, deferralParam, personId)
-    );
-
-    await ctx.replyWithHTML(
-      `✅ Срок отсрочки обновлён до <b>${escapeHtml(newDeferralValue)}</b> до <b>${endDateDisplay}</b>\n\n` +
-      '⏰ Автоматический возврат'
-    );
 
     session.step = STEPS.IDLE;
     session.personId = null;
@@ -228,7 +234,7 @@ async function performDeferralUpdate(ctx, session) {
     session.newDeferralTypeId = null;
     session.endDateStr = null;
     session.endDateDisplay = null;
-    session.clearDeferral = null;
+    session.noRestoreTask = null;
   } catch (err) {
     logger.error('updateDeferralAndSave error', err);
     await ctx.reply('❌ Ошибка при обновлении клиента. Попробуйте позже.');
@@ -239,18 +245,18 @@ async function handleDeferralCallback(ctx) {
   const session = getSession(ctx);
   if (session.step !== STEPS.AWAIT_NEW_DEFERRAL) return;
   const data = ctx.callbackQuery?.data || '';
-  const match = data.match(/^def:(\d+)$/);
+  const match = data.match(/^def:(.+)$/);
   if (!match) return;
-  const typeId = match[1];
+  const typeIdOrEmpty = match[1];
   const options = session.deferralOptions || [];
-  const opt = options.find(o => o.id === typeId);
+  const opt = typeIdOrEmpty === 'empty' ? EMPTY_DEFERRAL : options.find(o => String(o.id) === typeIdOrEmpty);
   if (!opt) return;
-  session.newDeferralTypeId = typeId;
+  session.newDeferralTypeId = opt.id === 'empty' ? '' : opt.id;
   session.newDeferralValue = opt.label;
   session.step = STEPS.AWAIT_END_DATE;
   await ctx.answerCbQuery();
   const durationButtons = DURATION_OPTIONS.map(o =>
-    Markup.button.callback(o.label, `dur:${o.days}`)
+    Markup.button.callback(o.label, o.days === null ? 'dur:none' : `dur:${o.days}`)
   );
   await ctx.reply('Выберите срок действия (до автоматического возврата):', Markup.inlineKeyboard(durationButtons, { columns: 2 }));
 }
@@ -259,14 +265,22 @@ async function handleDurationCallback(ctx) {
   const session = getSession(ctx);
   if (session.step !== STEPS.AWAIT_END_DATE) return;
   const data = ctx.callbackQuery?.data || '';
-  const match = data.match(/^dur:(\d+)$/);
+  const match = data.match(/^dur:(.+)$/);
   if (!match) return;
-  const days = parseInt(match[1], 10);
-  const opt = DURATION_OPTIONS.find(o => o.days === days);
+  const val = match[1];
+  const isNoTerm = val === 'none';
+  const days = isNoTerm ? null : parseInt(val, 10);
+  const opt = isNoTerm ? DURATION_OPTIONS.find(o => o.days === null) : DURATION_OPTIONS.find(o => o.days === days);
   if (!opt) return;
-  session.endDateStr = addDays(days);
-  const [y, m, d] = session.endDateStr.split('-');
-  session.endDateDisplay = `${d}.${m}.${y}`;
+  session.noRestoreTask = isNoTerm;
+  if (isNoTerm) {
+    session.endDateStr = null;
+    session.endDateDisplay = 'Без срока';
+  } else {
+    session.endDateStr = addDays(days);
+    const [y, m, d] = session.endDateStr.split('-');
+    session.endDateDisplay = `${d}.${m}.${y}`;
+  }
   await ctx.answerCbQuery();
   await performDeferralUpdate(ctx, session);
 }
@@ -295,21 +309,38 @@ async function handlePickClientCallback(ctx) {
       return;
     }
 
-    // Переходим сразу к выбору срока действия (мы просто временно очищаем отсрочку)
-    session.step = STEPS.AWAIT_END_DATE;
+    session.step = STEPS.AWAIT_NEW_DEFERRAL;
     session.personId = personId;
     session.client = client;
-    // Новое значение для истории / сообщений; в Smartup person_type_id будет очищен
-    session.newDeferralTypeId = '';
-    session.newDeferralValue = 'без отсрочки';
-    session.clearDeferral = true;
 
-    const durationButtons = DURATION_OPTIONS.map(o =>
-      Markup.button.callback(o.label, `dur:${o.days}`)
+    let deferralOptions = [];
+    try {
+      deferralOptions = await smartupApi.getDeferralOptions();
+    } catch (err) {
+      logger.error('getDeferralOptions error', err);
+    }
+    const allOptions = [ ...(deferralOptions || []),EMPTY_DEFERRAL];
+    const currentTypeId = (client.currentPersonTypeId || '').toString();
+    const selectableOptions = allOptions.filter(o => {
+      if (o.id === 'empty') return currentTypeId !== ''; // скрыть "пусто", если уже пусто
+      return String(o.id) !== currentTypeId; // скрыть текущий срок
+    });
+    session.deferralOptions = selectableOptions;
+
+    if (selectableOptions.length === 0) {
+      await ctx.reply('Текущий срок отсрочки уже установлен. Нет других вариантов для выбора.');
+      session.step = STEPS.IDLE;
+      session.personId = null;
+      session.client = null;
+      return;
+    }
+
+    const buttons = selectableOptions.map(o =>
+      Markup.button.callback(o.label, `def:${o.id || 'empty'}`)
     );
     await ctx.replyWithHTML(
-      formatClientInfo(client) + '\n\n📅 Выберите срок действия (отсрочка будет временно очищена):',
-      Markup.inlineKeyboard(durationButtons, { columns: 2 })
+      formatClientInfo(client) + '\n\n📅 Выберите новый срок отсрочки:',
+      Markup.inlineKeyboard(buttons, { columns: 2 })
     );
   } catch (err) {
     logger.error('loadClient error', err);
