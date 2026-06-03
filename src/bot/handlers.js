@@ -1,7 +1,7 @@
 const { Markup } = require('telegraf');
 const logger = require('../utils/logger');
 const smartupApi = require('../smartup/api');
-const { insertDeferralHistoryAndUpdateSmartup, getActiveRecords, getRecordById, hasActiveTaskForPerson } = require('../db/repositories');
+const { insertDeferralHistoryAndUpdateSmartup, getActiveRecords, getRecordById, getActiveRecordForPerson } = require('../db/repositories');
 const { restoreRecord } = require('../cron/restoreDeferral.job');
 const { notifyDataChanged, notifyRestored } = require('../notifications');
 
@@ -314,10 +314,19 @@ async function handlePickClientCallback(ctx) {
   const personId = match[1];
 
   await ctx.answerCbQuery();
-  // Запрещаем новое изменение, если для клиента уже есть активная задача
-  if (await hasActiveTaskForPerson(personId)) {
-    await ctx.reply('⚠️ Для этого клиента уже есть активная задача. Дождитесь автоматического возврата или выполните немедленный возврат через /tasks.');
-    return;
+
+  const activeRec = await getActiveRecordForPerson(personId);
+  if (activeRec) {
+    await ctx.reply('⏳ Найдена активная задача. Выполняю немедленный возврат...');
+    try {
+      await restoreRecord(activeRec);
+      await notifyRestored(ctx.telegram, { rec: activeRec, manualRestore: true, userId: ctx.from?.id });
+      await ctx.reply(`↩ Срок отсрочки восстановлен: ${activeRec.client_name || `person_id ${activeRec.person_id}`}`);
+    } catch (err) {
+      logger.error('Auto-restore error', err);
+      await ctx.reply('❌ Ошибка при автоматическом возврате: ' + (err.message || 'неизвестная ошибка'));
+      return;
+    }
   }
 
   await ctx.reply('⏳ Загружаю клиента...');

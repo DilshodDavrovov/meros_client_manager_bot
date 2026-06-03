@@ -86,14 +86,12 @@ async function getRecordById(id) {
   return rows[0] || null;
 }
 
-async function hasActiveTaskForPerson(personId) {
+async function getActiveRecordForPerson(personId) {
   const rows = query(
-    `SELECT COUNT(*) AS cnt FROM client_deferral_history 
-     WHERE person_id = ? AND status = 'ACTIVE'`,
+    `SELECT * FROM client_deferral_history WHERE person_id = ? AND status = 'ACTIVE' LIMIT 1`,
     [personId]
   );
-  const cnt = rows[0]?.cnt ?? rows[0]?.CNT ?? 0;
-  return cnt > 0;
+  return rows[0] || null;
 }
 
 async function markAsRestored(id) {
@@ -130,9 +128,9 @@ module.exports = {
   getActiveRecords,
   getActiveExpiredRecords,
   getRecordById,
+  getActiveRecordForPerson,
   markAsRestored,
   clearAllRecords,
   updateDeferralEndDate,
   insertDeferralHistoryAndUpdateSmartup,
-   hasActiveTaskForPerson,
 };
